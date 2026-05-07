@@ -1,14 +1,33 @@
 {
   "name": "gitlab-mcp-server",
   "version": "0.7.0",
-  "private": true,
   "description": "MCP server exposing a self-hosted or hosted GitLab instance to LLM clients (Claude Desktop, Claude Code, etc.) over stdio. 21 tools across issues, MRs, time tracking, repository code, search, and CI logs.",
   "type": "module",
+  "license": "MIT",
+  "author": "Keivan Sina <keivan.sina@gmail.com>",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gitlab",
+    "claude",
+    "claude-desktop",
+    "llm",
+    "stdio"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k1sina/gitlab-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/k1sina/gitlab-mcp-server/issues"
+  },
+  "homepage": "https://github.com/k1sina/gitlab-mcp-server#readme",
   "bin": {
     "gitlab-mcp-server": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
@@ -19,7 +38,9 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && node -e \"if (JSON.parse(require('fs').readFileSync('./package.json','utf8')).repository.url.includes('__REPO_URL__')) { console.error('Replace __REPO_URL__ in package.json before publishing'); process.exit(1) }\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

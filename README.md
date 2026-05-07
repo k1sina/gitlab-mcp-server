@@ -9,7 +9,41 @@ An MCP server that exposes a GitLab instance (gitlab.com or self-hosted) to LLM 
 - Node.js **20+** (uses native `fetch`)
 - A GitLab personal access token with the `api` scope, generated at `https://<your-gitlab-host>/-/user_settings/personal_access_tokens` (e.g. [https://gitlab.com/-/user_settings/personal_access_tokens](https://gitlab.com/-/user_settings/personal_access_tokens) for hosted).
 
-## Setup
+## Install
+
+The fastest path — let `npx` fetch and run the published package on demand. No clone, no build.
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "gitlab": {
+      "command": "npx",
+      "args": ["-y", "gitlab-mcp-server"],
+      "env": {
+        "GITLAB_TOKEN": "glpat-xxxxxxxxxxxxxxxxxxxx",
+        "GITLAB_URL": "https://gitlab.com/api/v4"
+      }
+    }
+  }
+}
+```
+
+**Claude Code** (CLI):
+
+```bash
+claude mcp add gitlab \
+  --env GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx \
+  --env GITLAB_URL=https://gitlab.com/api/v4 \
+  -- npx -y gitlab-mcp-server
+```
+
+Add `--scope user` to share across all projects, or `--scope project` to commit a `.mcp.json` to a repo.
+
+The `-y` flag auto-accepts npm's first-run install prompt; subsequent invocations are cached. Set `GITLAB_ENABLE_WRITES=true` in `env` to unlock the five write tools and the two state-mutating time tools (off by default — see [Write tools](#write-tools)).
+
+## Develop from source
 
 ```bash
 npm install
@@ -290,9 +324,11 @@ The code-aware tools and the older read tools overlap. Pick the right one to avo
 
 **Truncation is informative, not silent.** When a tool clamps its output, it sets `truncated: true` AND emits a `[TRUNCATE]` stderr line with original / returned / limit byte counts. If a response feels incomplete, check `truncated` — don't just retry with hope.
 
-## Registering with Claude Desktop
+## Registering a local build with Claude Desktop
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add:
+The recommended setup is `npx -y gitlab-mcp-server` — see [Install](#install). The instructions below are for running a **local build** (e.g. you cloned the repo to test a fork or unreleased change).
+
+After `npm run build`, edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add:
 
 ```json
 {
@@ -311,7 +347,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 
 Replace the path with the absolute path to your built `dist/index.js`, paste your token, and (if you're on a self-hosted instance) override `GITLAB_URL`. Restart Claude Desktop. The `gitlab` server should appear in the MCP servers list and `list_my_issues` should be callable.
 
-For development you can swap `command`/`args` to run via `tsx` without building:
+For development without a build step, run via `tsx`:
 
 ```json
 {
