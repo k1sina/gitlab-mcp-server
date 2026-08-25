@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GitlabNote } from "../gitlab-client.js";
+import type { GitlabClient, GitlabNote, ProjectId } from "../gitlab-client.js";
 
 export const projectIdSchema = z
   .union([z.number().int().positive(), z.string().min(1)])
@@ -22,6 +22,21 @@ export function ensureWritesEnabled(
       `Writes are disabled. Set GITLAB_ENABLE_WRITES=true on the MCP server to allow ${toolName}.`,
     );
   }
+}
+
+/**
+ * GraphQL addresses projects by full path, so numeric project ids (and
+ * all-digit strings) take one REST lookup first; path-style ids pass through.
+ */
+export async function resolveProjectPath(
+  client: GitlabClient,
+  projectId: ProjectId,
+): Promise<string> {
+  if (typeof projectId === "string" && !/^\d+$/.test(projectId.trim())) {
+    return projectId.trim();
+  }
+  const project = await client.getProject(projectId);
+  return project.path_with_namespace;
 }
 
 export const nonEmptyMarkdownBody = z

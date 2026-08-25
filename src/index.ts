@@ -80,6 +80,16 @@ import {
   type UpdateMergeRequestInput,
 } from "./tools/update-merge-request.js";
 import {
+  setIssueParentTool,
+  makeSetIssueParentHandler,
+  type SetIssueParentInput,
+} from "./tools/set-issue-parent.js";
+import {
+  changeIssueTypeTool,
+  makeChangeIssueTypeHandler,
+  type ChangeIssueTypeInput,
+} from "./tools/change-issue-type.js";
+import {
   getFileContentTool,
   makeGetFileContentHandler,
   type GetFileContentInput,
@@ -234,6 +244,20 @@ async function main(): Promise<void> {
     updateMergeRequestTool.config,
     async (args) =>
       wrap(() => updateMergeRequest(args as UpdateMergeRequestInput)),
+  );
+
+  const setIssueParent = makeSetIssueParentHandler(client, config.enableWrites);
+  server.registerTool(
+    setIssueParentTool.name,
+    setIssueParentTool.config,
+    async (args) => wrap(() => setIssueParent(args as SetIssueParentInput)),
+  );
+
+  const changeIssueType = makeChangeIssueTypeHandler(client, config.enableWrites);
+  server.registerTool(
+    changeIssueTypeTool.name,
+    changeIssueTypeTool.config,
+    async (args) => wrap(() => changeIssueType(args as ChangeIssueTypeInput)),
   );
 
   const getFileContent = makeGetFileContentHandler(client);

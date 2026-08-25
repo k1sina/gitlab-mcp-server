@@ -49,6 +49,18 @@ export interface GitlabWorkItemStatus {
   color: string;
 }
 
+export interface GitlabWorkItemSummary {
+  iid: string;
+  title: string;
+  type: string;
+  web_url: string;
+}
+
+export interface GitlabWorkItemParentResult {
+  child: GitlabWorkItemSummary;
+  parent: GitlabWorkItemSummary | null;
+}
+
 export interface GitlabIssueDetail extends GitlabIssueRef {
   description: string | null;
   closed_at: string | null;
@@ -339,6 +351,12 @@ export class GitlabClient {
     return this.request<GitlabMergeRequestRef[]>(`/merge_requests?${params.toString()}`);
   }
 
+  async getProject(projectId: ProjectId): Promise<GitlabProjectRef> {
+    return this.request<GitlabProjectRef>(
+      `/projects/${encodeProjectId(projectId)}`,
+    );
+  }
+
   async getIssue(projectId: ProjectId, issueIid: number): Promise<GitlabIssueDetail> {
     return this.request<GitlabIssueDetail>(
       `/projects/${encodeProjectId(projectId)}/issues/${issueIid}`,
@@ -552,6 +570,227 @@ export class GitlabClient {
     return result;
   }
 
+  /**
+   * Set (or clear) the parent of a work item. GitLab models parent/child
+   * ("child items") on work items via GraphQL, not the REST issues API, so
+   * both ends are resolved from (projectPath, iid) to global work-item ids
+   * first, then `workItemUpdate` runs with the hierarchy widget. Pass
+   * `parent: null` to detach the child from its current parent.
+   */
+  async setWorkItemParent(
+    childProjectPath: string,
+    childIid: number,
+    parent: { projectPath: string; iid: number } | null,
+  ): Promise<GitlabWorkItemParentResult> {
+    interface GidNode {
+      id: string;
+      iid: string;
+    }
+    type ResolveData = Record<
+      string,
+      { workItems: { nodes: GidNode[] } } | null
+    >;
+
+    // workItems(iids:) expects [String!] (NOT [ID!]); project fullPath is ID!.
+    const resolveVariables: Record<string, unknown> = {
+      childPath: childProjectPath,
+      childIids: [String(childIid)],
+    };
+    const fragments = [
+      "child: project(fullPath: $childPath) { workItems(iids: $childIids) { nodes { id iid } } }",
+    ];
+    const argSig = ["$childPath: ID!", "$childIids: [String!]!"];
+    if (parent) {
+      resolveVariables.parentPath = parent.projectPath;
+      resolveVariables.parentIids = [String(parent.iid)];
+      fragments.push(
+        "parent: project(fullPath: $parentPath) { workItems(iids: $parentIids) { nodes { id iid } } }",
+      );
+      argSig.push("$parentPath: ID!", "$parentIids: [String!]!");
+    }
+    const resolved = await this.graphql<ResolveData>(
+      `query ResolveWorkItems(${argSig.join(", ")}) { ${fragments.join(" ")} }`,
+      resolveVariables,
+    );
+
+    const url = this.graphqlUrl();
+    const childGid = resolved.child?.workItems.nodes[0]?.id;
+    if (!childGid) {
+      throw new GitlabError(
+        `Work item ${childProjectPath}#${childIid} not found (or the token cannot see it).`,
+        404,
+        url,
+      );
+    }
+    let parentGid: string | null = null;
+    if (parent) {
+      parentGid = resolved.parent?.workItems.nodes[0]?.id ?? null;
+      if (!parentGid) {
+        throw new GitlabError(
+          `Parent work item ${parent.projectPath}#${parent.iid} not found (or the token cannot see it).`,
+          404,
+          url,
+        );
+      }
+    }
+
+    const input = { id: childGid, hierarchyWidget: { parentId: parentGid } };
+    process.stderr.write(
+      `[WRITE] GRAPHQL workItemUpdate ${url} payload=${JSON.stringify(input)}\n`,
+    );
+
+    interface ParentNode {
+      iid: string;
+      title: string;
+      webUrl: string;
+      workItemType: { name: string } | null;
+    }
+    interface MutationData {
+      workItemUpdate: {
+        errors: string[];
+        workItem: (ParentNode & {
+          widgets: Array<{ parent?: ParentNode | null }>;
+        }) | null;
+      } | null;
+    }
+    const data = await this.graphql<MutationData>(
+      "mutation SetWorkItemParent($input: WorkItemUpdateInput!) { workItemUpdate(input: $input) { errors workItem { iid title webUrl workItemType { name } widgets { ... on WorkItemWidgetHierarchy { parent { iid title webUrl workItemType { name } } } } } } }",
+      { input },
+    );
+
+    const payload = data.workItemUpdate;
+    if (payload && payload.errors.length > 0) {
+      throw new GitlabError(
+        `GitLab rejected the parent change: ${payload.errors.join("; ")}`,
+        200,
+        url,
+        payload,
+      );
+    }
+    const workItem = payload?.workItem;
+    if (!workItem) {
+      throw new GitlabError(
+        "GitLab returned no work item from workItemUpdate — the mutation may not be supported on this instance.",
+        200,
+        url,
+        data,
+      );
+    }
+    const hierarchy = workItem.widgets.find(
+      (w): w is { parent?: ParentNode | null } => "parent" in (w as object),
+    );
+    const parentNode = hierarchy?.parent ?? null;
+    return {
+      child: summarizeWorkItem(workItem),
+      parent: parentNode ? summarizeWorkItem(parentNode) : null,
+    };
+  }
+
+  /**
+   * Convert a work item to a different type (Issue → Task / Incident /
+   * Epic / …) via the GraphQL workItemConvert mutation. Type ids are
+   * instance-specific, so the project's available types are fetched
+   * alongside the work item gid and the requested name is matched
+   * case-insensitively (underscores/hyphens tolerated, so "test_case"
+   * matches "Test Case").
+   */
+  async changeWorkItemType(
+    projectPath: string,
+    iid: number,
+    newTypeName: string,
+  ): Promise<{ item: GitlabWorkItemSummary; previous_type: string }> {
+    interface ResolveData {
+      project: {
+        workItems: {
+          nodes: Array<{
+            id: string;
+            iid: string;
+            workItemType: { name: string } | null;
+          }>;
+        };
+        workItemTypes: { nodes: Array<{ id: string; name: string }> };
+      } | null;
+    }
+    // workItems(iids:) expects [String!] (NOT [ID!]); project fullPath is ID!.
+    const resolved = await this.graphql<ResolveData>(
+      "query ResolveConvert($path: ID!, $iids: [String!]!) { project(fullPath: $path) { workItems(iids: $iids) { nodes { id iid workItemType { name } } } workItemTypes { nodes { id name } } } }",
+      { path: projectPath, iids: [String(iid)] },
+    );
+
+    const url = this.graphqlUrl();
+    const node = resolved.project?.workItems.nodes[0];
+    if (!node) {
+      throw new GitlabError(
+        `Work item ${projectPath}#${iid} not found (or the token cannot see it).`,
+        404,
+        url,
+      );
+    }
+    const types = resolved.project?.workItemTypes.nodes ?? [];
+    const normalize = (s: string) =>
+      s.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
+    const target = types.find(
+      (t) => normalize(t.name) === normalize(newTypeName),
+    );
+    if (!target) {
+      const available = types.map((t) => t.name).join(", ");
+      throw new GitlabError(
+        `Unknown work item type "${newTypeName}". Types available on this instance: ${available}.`,
+        404,
+        url,
+      );
+    }
+    const previousType = node.workItemType?.name ?? "unknown";
+    if (normalize(previousType) === normalize(target.name)) {
+      throw new GitlabError(
+        `Work item ${projectPath}#${iid} is already of type "${previousType}" — nothing to convert.`,
+        200,
+        url,
+      );
+    }
+
+    const input = { id: node.id, workItemTypeId: target.id };
+    process.stderr.write(
+      `[WRITE] GRAPHQL workItemConvert ${url} payload=${JSON.stringify(input)}\n`,
+    );
+
+    interface MutationData {
+      workItemConvert: {
+        errors: string[];
+        workItem: {
+          iid: string;
+          title: string;
+          webUrl: string;
+          workItemType: { name: string } | null;
+        } | null;
+      } | null;
+    }
+    const data = await this.graphql<MutationData>(
+      "mutation ConvertWorkItem($input: WorkItemConvertInput!) { workItemConvert(input: $input) { errors workItem { iid title webUrl workItemType { name } } } }",
+      { input },
+    );
+
+    const payload = data.workItemConvert;
+    if (payload && payload.errors.length > 0) {
+      throw new GitlabError(
+        `GitLab rejected the type change: ${payload.errors.join("; ")}`,
+        200,
+        url,
+        payload,
+      );
+    }
+    const workItem = payload?.workItem;
+    if (!workItem) {
+      throw new GitlabError(
+        "GitLab returned no work item from workItemConvert — the mutation may not be supported on this instance.",
+        200,
+        url,
+        data,
+      );
+    }
+    return { item: summarizeWorkItem(workItem), previous_type: previousType };
+  }
+
   async getFileContentRaw(
     projectId: ProjectId,
     filePath: string,
@@ -684,17 +923,15 @@ export class GitlabClient {
    * response carries an `errors` array, so the same wrap() pipeline
    * surfaces failures in the tool output.
    */
+  private graphqlUrl(): string {
+    return this.baseUrl.replace(/\/api\/v\d+\/?$/, "/api/graphql");
+  }
+
   private async graphql<T>(
     query: string,
     variables?: Record<string, unknown>,
   ): Promise<T> {
-    const graphqlUrl = this.baseUrl.replace(
-      /\/api\/v\d+\/?$/,
-      "/api/graphql",
-    );
-    const url = graphqlUrl.startsWith(this.baseUrl)
-      ? graphqlUrl // shouldn't happen given the regex, but keeps the type happy
-      : graphqlUrl;
+    const url = this.graphqlUrl();
     let response: Response;
     try {
       response = await fetch(url, {
@@ -813,6 +1050,20 @@ export class GitlabClient {
     const message = formatErrorMessage(response, body);
     throw new GitlabError(message, response.status, url, body);
   }
+}
+
+function summarizeWorkItem(node: {
+  iid: string;
+  title: string;
+  webUrl: string;
+  workItemType: { name: string } | null;
+}): GitlabWorkItemSummary {
+  return {
+    iid: node.iid,
+    title: node.title,
+    type: node.workItemType?.name ?? "unknown",
+    web_url: node.webUrl,
+  };
 }
 
 function targetSegment(target: TimeTrackingTarget): "issues" | "merge_requests" {

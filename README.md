@@ -2,7 +2,7 @@
 
 An MCP server that exposes a GitLab instance (gitlab.com or self-hosted) to LLM clients (Claude Desktop, Claude Code, etc.) over **stdio**. Configure with one env var (`GITLAB_TOKEN`); point at any instance via `GITLAB_URL`.
 
-> **Status:** v0.7 — 21 tools across four categories: 6 issue/MR read (`list_my_issues`, `list_my_merge_requests`, `get_issue`, `get_merge_request`, `list_project_pipelines`, `search_projects`), 4 time-tracking (`log_time`, `get_time`, `delete_time`, `report_time`), 5 write (`comment_on_issue`, `comment_on_mr`, `create_issue`, `update_issue`, `update_merge_request`), and 6 code-aware read (`get_file_content`, `list_repository_tree`, `get_mr_diff`, `search_code`, `get_pipeline_jobs`, `get_job_log`). `list_my_issues` is **actionable-by-default** (filters by GitLab Work Item Status — names configurable via env). All state-mutating tools are gated behind `GITLAB_ENABLE_WRITES=true`.
+> **Status:** v0.7 — 23 tools across four categories: 6 issue/MR read (`list_my_issues`, `list_my_merge_requests`, `get_issue`, `get_merge_request`, `list_project_pipelines`, `search_projects`), 4 time-tracking (`log_time`, `get_time`, `delete_time`, `report_time`), 7 write (`comment_on_issue`, `comment_on_mr`, `create_issue`, `update_issue`, `update_merge_request`, `set_issue_parent`, `change_issue_type`), and 6 code-aware read (`get_file_content`, `list_repository_tree`, `get_mr_diff`, `search_code`, `get_pipeline_jobs`, `get_job_log`). `list_my_issues` is **actionable-by-default** (filters by GitLab Work Item Status — names configurable via env). All state-mutating tools are gated behind `GITLAB_ENABLE_WRITES=true`.
 
 ## Requirements
 
@@ -246,6 +246,27 @@ Updates fields on an existing MR. Same shape as `update_issue` plus `reviewer_id
 - Same labels-conflict rule as `update_issue`.
 - Returns the updated MR.
 - Example: *"Mark MR 17 in project 89 as ready (clear Draft) and add user 51 as a reviewer."*
+
+#### `set_issue_parent`
+
+Sets (or removes) the **parent** of an issue/task — the parent/child hierarchy the GitLab UI shows as "Child items". Runs over the work-items GraphQL API: both tickets are resolved from `project + iid` to global work-item ids, then `workItemUpdate` applies the hierarchy widget. The mutation is logged to stderr as `[WRITE] GRAPHQL workItemUpdate …`.
+
+- Required: `project_id`, `issue_iid` (the **child**), and either `parent_issue_iid` or `remove_parent: true` (mutually exclusive).
+- Optional: `parent_project_id` — only when the parent lives in a different project (defaults to `project_id`).
+- Setting a parent **replaces** any existing one. GitLab enforces which work-item types may nest (e.g. Task under Issue, Issue under Epic — tier/version dependent); disallowed combinations come back as the verbatim GitLab rejection.
+- Returns the child and its new parent (`iid`, `title`, `type`, `web_url`); `parent` is `null` after a removal.
+- Not for "relates to"/"blocks" links (GitLab *linked issues* — not exposed by this server).
+- Example: *"Make ticket #12 a child of #5 in jakota/support."* / *"Detach #12 from its parent."*
+
+#### `change_issue_type`
+
+Converts a work item to a different **type** — Issue → Task / Incident / Epic / Test Case, and back. Runs over the work-items GraphQL API: one query resolves the ticket's global id plus the instance's available types (type ids are instance-specific), then `workItemConvert` applies the change. Logged to stderr as `[WRITE] GRAPHQL workItemConvert …`.
+
+- Required: `project_id`, `issue_iid`, `new_type` (type **name**, matched case-insensitively; `test_case` matches "Test Case"). An unknown name fails *before* mutating, listing the types the instance offers.
+- The ticket keeps its iid, title, and comments; GitLab may drop fields tied to the old type (e.g. incident-specific data). Which conversions are allowed is tier/version dependent — disallowed ones come back as the verbatim GitLab rejection.
+- Converting to the type it already has fails fast with an "already of type" message (no GitLab write).
+- Returns `previous_type` plus the converted item (`iid`, `title`, `type`, `web_url`).
+- Example: *"Convert issue #12 in jakota/support to a task."* / *"This should be an incident."*
 
 ### Code-aware tools
 

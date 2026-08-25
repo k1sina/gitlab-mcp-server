@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A stdio MCP server (`@modelcontextprotocol/sdk` 1.29+) that exposes a GitLab instance (hosted gitlab.com or self-hosted) to LLM clients. Authenticates via `GITLAB_TOKEN` env var, sent on every request as the `PRIVATE-TOKEN` header. No HTTP listener — the process speaks JSON-RPC over stdin/stdout and writes nothing to stdout until a client connects (logs go to stderr).
 
-21 tools across four categories: issue/MR read, time tracking, write actions (gated behind `GITLAB_ENABLE_WRITES=true`), and code-aware reads (file/tree/diff/search/CI logs). Full inventory in `README.md`.
+23 tools across four categories: issue/MR read, time tracking, write actions (gated behind `GITLAB_ENABLE_WRITES=true`), and code-aware reads (file/tree/diff/search/CI logs). Full inventory in `README.md`.
 
 ## Commands
 
