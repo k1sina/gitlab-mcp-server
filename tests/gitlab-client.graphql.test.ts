@@ -102,6 +102,57 @@ describe("graphql() transport (exercised via fetchWorkItemStatuses)", () => {
     ).rejects.toThrow(/401/);
   });
 
+  it("splits many projects across queries to stay under GitLab's complexity cap", async () => {
+    const fetchMock = installFetchMock([
+      {
+        ok: true,
+        status: 200,
+        body: {
+          data: {
+            p_0: { workItems: { nodes: [] } },
+            p_1: { workItems: { nodes: [] } },
+            p_2: { workItems: { nodes: [] } },
+          },
+        },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: {
+          data: {
+            p_0: {
+              workItems: {
+                nodes: [
+                  {
+                    iid: "4",
+                    widgets: [
+                      { status: { id: "s", name: "To do", color: "#fff", iconName: "i" } },
+                    ],
+                  },
+                ],
+              },
+            },
+            p_1: { workItems: { nodes: [] } },
+          },
+        },
+      },
+    ]);
+    const map = await newClient().fetchWorkItemStatuses(
+      ["a", "b", "c", "d", "e"].map((p, i) => ({ projectPath: `g/${p}`, iid: i + 1 })),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(
+      (fetchMock.mock.calls[1]! as [string, RequestInit])[1].body as string,
+    );
+    expect(second.variables).toEqual({
+      path0: "g/d",
+      iids0: ["4"],
+      path1: "g/e",
+      iids1: ["5"],
+    });
+    expect(map.get("g/d#4")?.name).toBe("To do");
+  });
+
   it("returns an empty Map (no fetch) when given no items", async () => {
     const fetchMock = installFetchMock([]);
     const map = await newClient().fetchWorkItemStatuses([]);

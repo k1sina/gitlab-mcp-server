@@ -119,6 +119,11 @@ import {
   makeGetJobLogHandler,
   type GetJobLogInput,
 } from "./tools/get-job-log.js";
+import {
+  getAttachmentTool,
+  makeGetAttachmentHandler,
+  type GetAttachmentInput,
+} from "./tools/get-attachment.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -303,11 +308,18 @@ async function main(): Promise<void> {
     async (args) => wrap(() => getJobLog(args as GetJobLogInput)),
   );
 
+  const getAttachment = makeGetAttachmentHandler(client);
+  server.registerTool(
+    getAttachmentTool.name,
+    getAttachmentTool.config,
+    async (args) => wrap(() => getAttachment(args as GetAttachmentInput)),
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-async function wrap<T extends { content: Array<{ type: "text"; text: string }> }>(
+async function wrap<T extends { content: Array<{ type: string }> }>(
   fn: () => Promise<T>,
 ): Promise<T | { isError: true; content: [{ type: "text"; text: string }] }> {
   try {

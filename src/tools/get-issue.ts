@@ -50,6 +50,8 @@ export const getIssueTool = {
       "",
       "The `status` field reflects GitLab's Work Item Status widget (e.g. 'To do', 'In progress', 'Done'). It is `null` for tickets in projects that don't use the field.",
       "",
+      "Images and file attachments appear in `description` / note `body` as markdown links like '![screenshot](/uploads/<secret>/<file>.png)'. Their contents are NOT included — call get_attachment with that link and this project_id to see them.",
+      "",
       "Returns: { issue: { ...full detail including status... }, notes: [ ...filtered comments in ascending chronological order... ] }.",
     ].join("\n"),
     inputSchema: getIssueInputShape,

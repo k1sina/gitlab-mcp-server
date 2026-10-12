@@ -56,6 +56,8 @@ export const getMergeRequestTool = {
       "DIFFS ARE OFF BY DEFAULT — they can be huge and consume model context fast. Pass include_diffs=true only when the user explicitly asks to see the code change.",
       "By default system notes are filtered out (approval/branch/label bookkeeping); pass include_system_notes=true for a full audit timeline.",
       "",
+      "Images and file attachments appear in `description` / note `body` as markdown links like '![screenshot](/uploads/<secret>/<file>.png)'. Their contents are NOT included — call get_attachment with that link and this project_id to see them.",
+      "",
       "Returns: { merge_request: {...}, changes: [...] | null, notes: [...] | null }. `changes` is null unless include_diffs=true; `notes` is null unless include_notes=true.",
     ].join("\n"),
     inputSchema: getMergeRequestInputShape,

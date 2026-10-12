@@ -270,6 +270,12 @@ export interface UpdateMergeRequestPayload {
   draft?: boolean;
 }
 
+/**
+ * Projects per work-item-status GraphQL query. GitLab's max complexity is 250
+ * and each project fragment costs ~61 (measured: 5 projects = 305).
+ */
+const STATUS_PROJECTS_PER_QUERY = 3;
+
 export class GitlabClient {
   constructor(
     private readonly baseUrl: string,
@@ -505,7 +511,10 @@ export class GitlabClient {
    * status (or null when the widget is absent / unset — e.g. tickets in the
    * support project, which doesn't have the field).
    *
-   * One batched GraphQL request regardless of project count.
+   * Batched: one GraphQL request per STATUS_PROJECTS_PER_QUERY projects.
+   * GitLab caps query complexity at 250 and each aliased `project { workItems }`
+   * fragment costs ~61, so a single query breaks at 5 projects ("Query has
+   * complexity of 305"). Batches run sequentially to stay gentle on the API.
    */
   async fetchWorkItemStatuses(
     items: Array<{ projectPath: string; iid: number }>,
@@ -521,13 +530,26 @@ export class GitlabClient {
       byPath.set(projectPath, set);
     }
 
+    const projects = Array.from(byPath);
+    for (let i = 0; i < projects.length; i += STATUS_PROJECTS_PER_QUERY) {
+      await this.fetchWorkItemStatusBatch(
+        projects.slice(i, i + STATUS_PROJECTS_PER_QUERY),
+        result,
+      );
+    }
+    return result;
+  }
+
+  private async fetchWorkItemStatusBatch(
+    projects: Array<[string, Set<number>]>,
+    result: Map<string, GitlabWorkItemStatus | null>,
+  ): Promise<void> {
     // Build aliased query fragments. Aliases are p_<index> to avoid the need
     // to escape special characters from the project path.
     const aliases: Array<{ alias: string; path: string }> = [];
-    let idx = 0;
     const variables: Record<string, unknown> = {};
     const fragments: string[] = [];
-    for (const [path, iids] of byPath) {
+    projects.forEach(([path, iids], idx) => {
       const alias = `p_${idx}`;
       const pathVar = `path${idx}`;
       const iidsVar = `iids${idx}`;
@@ -537,8 +559,7 @@ export class GitlabClient {
         `${alias}: project(fullPath: $${pathVar}) { workItems(iids: $${iidsVar}) { nodes { iid widgets { ... on WorkItemWidgetStatus { status { id name color iconName } } } } } }`,
       );
       aliases.push({ alias, path });
-      idx += 1;
-    }
+    });
     // workItems(iids:) expects [String!] on this GitLab version (NOT [ID!]).
     const argSig = aliases
       .map((_, i) => `$path${i}: ID!, $iids${i}: [String!]!`)
@@ -567,7 +588,6 @@ export class GitlabClient {
         result.set(`${path}#${node.iid}`, status);
       }
     }
-    return result;
   }
 
   /**
@@ -799,6 +819,27 @@ export class GitlabClient {
     const params = new URLSearchParams({ ref });
     const response = await this.requestRaw(
       `/projects/${encodeProjectId(projectId)}/repository/files/${urlEncodePath(filePath)}/raw?${params.toString()}`,
+    );
+    const ab = await response.arrayBuffer();
+    return {
+      buffer: Buffer.from(ab),
+      contentType: response.headers.get("Content-Type"),
+    };
+  }
+
+  /**
+   * Download a markdown upload (image / attachment pasted into an issue,
+   * MR, or comment) by the secret + filename from its `/uploads/...` URL.
+   * The web URL ignores PRIVATE-TOKEN, so this goes through the API
+   * endpoint added in GitLab 17.4 (Guest role is enough).
+   */
+  async getProjectUploadRaw(
+    projectId: ProjectId,
+    secret: string,
+    filename: string,
+  ): Promise<{ buffer: Buffer; contentType: string | null }> {
+    const response = await this.requestRaw(
+      `/projects/${encodeProjectId(projectId)}/uploads/${encodeURIComponent(secret)}/${encodeURIComponent(filename)}`,
     );
     const ab = await response.arrayBuffer();
     return {
