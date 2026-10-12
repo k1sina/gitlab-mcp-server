@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A stdio MCP server (`@modelcontextprotocol/sdk` 1.29+) that exposes a GitLab instance (hosted gitlab.com or self-hosted) to LLM clients. Authenticates via `GITLAB_TOKEN` env var, sent on every request as the `PRIVATE-TOKEN` header. No HTTP listener — the process speaks JSON-RPC over stdin/stdout and writes nothing to stdout until a client connects (logs go to stderr).
 
-23 tools across four categories: issue/MR read, time tracking, write actions (gated behind `GITLAB_ENABLE_WRITES=true`), and code-aware reads (file/tree/diff/search/CI logs). Full inventory in `README.md`.
+24 tools across four categories: issue/MR read (incl. `get_attachment` for `/uploads/` images & files), time tracking, write actions (gated behind `GITLAB_ENABLE_WRITES=true`), and code-aware reads (file/tree/diff/search/CI logs). Full inventory in `README.md`.
 
 ## Commands
 
@@ -27,7 +27,7 @@ Node **20+** is required (uses native `fetch`, and the SDK's peer chain requires
 Four-layer boundary, kept deliberately thin:
 
 1. **`src/config.ts`** — single `loadConfig()` reads env vars, validates `GITLAB_TOKEN`, returns a `ServerConfig`. Defaults: `GITLAB_URL=https://gitlab.com/api/v4`, `DEFAULT_PROJECT_IDS=[]`, `ACTIONABLE_STATUSES=["To do","In progress"]`. Tools should pull instance-specific defaults from config rather than hardcoding.
-2. **`src/gitlab-client.ts`** — `GitlabClient` wraps `fetch` with private `request<T>()`, `requestRaw()` (for non-JSON bodies — file content, job logs), `requestWrite<T>()` (state-mutating endpoints; emits `[WRITE]` to stderr unconditionally), and `graphql<T>()` (used by `fetchWorkItemStatuses`). All HTTP errors become `GitlabError` with status, URL, and parsed body; messages are crafted per status (401 / 403 / 404 / 429 with `Retry-After` / 5xx / network). Add new GitLab calls as typed methods on this class — do not call `fetch` from tool files.
+2. **`src/gitlab-client.ts`** — `GitlabClient` wraps `fetch` with private `request<T>()`, `requestRaw()` (for non-JSON bodies — file content, job logs, uploads), `requestWrite<T>()` (state-mutating endpoints; emits `[WRITE]` to stderr unconditionally), and `graphql<T>()` (used by `fetchWorkItemStatuses`). All HTTP errors become `GitlabError` with status, URL, and parsed body; messages are crafted per status (401 / 403 / 404 / 429 with `Retry-After` / 5xx / network). Add new GitLab calls as typed methods on this class — do not call `fetch` from tool files.
 3. **`src/tools/<tool-name>.ts`** — one file per MCP tool. Each exports: a zod **raw shape** object (`{ field: z.string()... }`, *not* `z.object(...)` — that's what `registerTool`'s `inputSchema` expects), a `<tool>Tool` descriptor with `name` and `config`, and a `make<Tool>Handler(client, ...)` factory. Handlers return `{ content: [{ type: "text", text }] }`; throwing is fine — `index.ts` catches and converts to `{ isError: true, content: [...] }`.
 4. **`src/index.ts`** — wires it all together: load config → construct client → `new McpServer(...)` → `registerTool` per tool → `connect(new StdioServerTransport())`. Adding a tool = one new file in `src/tools/` + one `registerTool` block here.
 

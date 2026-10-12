@@ -2,7 +2,7 @@
 
 An MCP server that exposes a GitLab instance (gitlab.com or self-hosted) to LLM clients (Claude Desktop, Claude Code, etc.) over **stdio**. Configure with one env var (`GITLAB_TOKEN`); point at any instance via `GITLAB_URL`.
 
-> **Status:** v0.7 — 23 tools across four categories: 6 issue/MR read (`list_my_issues`, `list_my_merge_requests`, `get_issue`, `get_merge_request`, `list_project_pipelines`, `search_projects`), 4 time-tracking (`log_time`, `get_time`, `delete_time`, `report_time`), 7 write (`comment_on_issue`, `comment_on_mr`, `create_issue`, `update_issue`, `update_merge_request`, `set_issue_parent`, `change_issue_type`), and 6 code-aware read (`get_file_content`, `list_repository_tree`, `get_mr_diff`, `search_code`, `get_pipeline_jobs`, `get_job_log`). `list_my_issues` is **actionable-by-default** (filters by GitLab Work Item Status — names configurable via env). All state-mutating tools are gated behind `GITLAB_ENABLE_WRITES=true`.
+> **Status:** v0.7 — 24 tools across four categories: 7 issue/MR read (`list_my_issues`, `list_my_merge_requests`, `get_issue`, `get_merge_request`, `get_attachment`, `list_project_pipelines`, `search_projects`), 4 time-tracking (`log_time`, `get_time`, `delete_time`, `report_time`), 7 write (`comment_on_issue`, `comment_on_mr`, `create_issue`, `update_issue`, `update_merge_request`, `set_issue_parent`, `change_issue_type`), and 6 code-aware read (`get_file_content`, `list_repository_tree`, `get_mr_diff`, `search_code`, `get_pipeline_jobs`, `get_job_log`). `list_my_issues` is **actionable-by-default** (filters by GitLab Work Item Status — names configurable via env). All state-mutating tools are gated behind `GITLAB_ENABLE_WRITES=true`.
 
 ## Requirements
 
@@ -122,6 +122,22 @@ Full MR body, optional diffs, and discussion.
 - `include_system_notes` (optional, default `false`): include bookkeeping notes.
 
 Output: `{ merge_request: {...}, changes: { files: [...] } | null, notes: [...] | null }`.
+
+### `get_attachment`
+
+Reads an image or file pasted into an issue, MR, or comment. `get_issue` / `get_merge_request` only return the markdown link (`![shot](/uploads/<secret>/shot.png)`); this fetches the file behind it via `GET /projects/:id/uploads/:secret/:filename` (**GitLab 17.4+**; the web `/uploads/` URL ignores API tokens).
+
+- `url`: the link as it appears in the markdown. A relative `/uploads/...` path, an absolute web URL, or the whole `![alt](...){width=..}` snippet all work.
+- `project_id` (optional): the issue / MR's project. Required for relative links; inferred from absolute URLs (`<host>/<group>/<repo>/uploads/...` or `/-/project/<id>/uploads/...`).
+- `max_bytes` (optional, default 200000): truncation cap for **text** attachments only.
+
+Output: a JSON metadata block `{ filename, project_id, content_type, size_bytes, kind }` followed by, depending on `kind`:
+- `image` (PNG / JPEG / GIF / WebP, ≤ 5MB): an MCP image content block the model can see.
+- `text` (logs, CSV, JSON, SVG, …): `content` inline, truncated at `max_bytes` with a `[TRUNCATE]` stderr line.
+- `pdf` (≤ 5MB): an embedded `application/pdf` resource. Whether the model can read it depends on the client.
+- `binary` (archives, Office docs, oversized images): metadata plus a `note`, no content.
+
+Type is sniffed from magic bytes first, so uploads served as `application/octet-stream` still come back as images.
 
 ### `list_project_pipelines`
 
@@ -338,6 +354,7 @@ The code-aware tools and the older read tools overlap. Pick the right one to avo
 | List recent pipelines for a project | `list_project_pipelines` | `get_pipeline_jobs` (drills INTO one pipeline) |
 | List jobs in one specific pipeline | `get_pipeline_jobs` | `list_project_pipelines` (no per-job detail) |
 | Read a job's failure output | `get_job_log` | `get_pipeline_jobs` (job metadata only, no log) |
+| See a screenshot / attachment linked in an issue or MR | `get_attachment` (pass the `/uploads/...` link) | `get_file_content` (repository files only) |
 
 **Substring-only matters.** `search_code` does NOT do regex, glob, or fuzzy matching. Pass the shortest distinctive substring of what you're looking for (e.g. `"parseTimeNote"`, not `parseTime.*Note` or `*.Note`). Quotes are not interpreted.
 

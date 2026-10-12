@@ -827,6 +827,27 @@ export class GitlabClient {
     };
   }
 
+  /**
+   * Download a markdown upload (image / attachment pasted into an issue,
+   * MR, or comment) by the secret + filename from its `/uploads/...` URL.
+   * The web URL ignores PRIVATE-TOKEN, so this goes through the API
+   * endpoint added in GitLab 17.4 (Guest role is enough).
+   */
+  async getProjectUploadRaw(
+    projectId: ProjectId,
+    secret: string,
+    filename: string,
+  ): Promise<{ buffer: Buffer; contentType: string | null }> {
+    const response = await this.requestRaw(
+      `/projects/${encodeProjectId(projectId)}/uploads/${encodeURIComponent(secret)}/${encodeURIComponent(filename)}`,
+    );
+    const ab = await response.arrayBuffer();
+    return {
+      buffer: Buffer.from(ab),
+      contentType: response.headers.get("Content-Type"),
+    };
+  }
+
   async listRepositoryTree(
     projectId: ProjectId,
     options: {
