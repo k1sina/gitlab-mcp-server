@@ -1,6 +1,6 @@
 # gitlab-mcp-server
 
-An MCP server that exposes a GitLab instance (gitlab.com or self-hosted) to LLM clients (Claude Desktop, Claude Code, etc.) over **stdio**. Configure with one env var (`GITLAB_TOKEN`); point at any instance via `GITLAB_URL`.
+An MCP server that exposes a GitLab instance (gitlab.com or self-hosted) to LLM clients (Claude Desktop, Claude Code, etc.) over **stdio**, or over Streamable HTTP for hosting (see [HTTP mode](#http-mode)). Configure with one env var (`GITLAB_TOKEN`); point at any instance via `GITLAB_URL`.
 
 > **Status:** v0.7 — 24 tools across four categories: 7 issue/MR read (`list_my_issues`, `list_my_merge_requests`, `get_issue`, `get_merge_request`, `get_attachment`, `list_project_pipelines`, `search_projects`), 4 time-tracking (`log_time`, `get_time`, `delete_time`, `report_time`), 7 write (`comment_on_issue`, `comment_on_mr`, `create_issue`, `update_issue`, `update_merge_request`, `set_issue_parent`, `change_issue_type`), and 6 code-aware read (`get_file_content`, `list_repository_tree`, `get_mr_diff`, `search_code`, `get_pipeline_jobs`, `get_job_log`). `list_my_issues` is **actionable-by-default** (filters by GitLab Work Item Status — names configurable via env). All state-mutating tools are gated behind `GITLAB_ENABLE_WRITES=true`.
 
@@ -61,6 +61,28 @@ npm run build
 | `ACTIONABLE_STATUSES` | no       | `To do,In progress`           | Comma-separated GitLab Work Item Status names that `list_my_issues` keeps by default. GitLab's stock workflow uses these names. Override if your instance has renamed them. Set to empty string to disable the default filter.        |
 | `GITLAB_ENABLE_WRITES`| no       | (disabled)                    | Set to `1`/`true`/`yes` to enable the five write tools and the two state-mutating time tools. Disabled by default so a misrouted tool call cannot mutate GitLab state.                                                                |
 
+### HTTP mode
+
+stdio is the default. Set `MCP_TRANSPORT=http` to serve MCP over Streamable HTTP instead, for hosting behind an authenticating gateway:
+
+```bash
+MCP_TRANSPORT=http MCP_HTTP_TOKEN=$(openssl rand -hex 32) node dist/index.js
+# [gitlab-mcp-server] listening on http://127.0.0.1:8701/mcp as @you
+```
+
+| Variable         | Default     | Notes                                                                                                                                                                                                     |
+| ---------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP_TRANSPORT`  | `stdio`     | `stdio` or `http`. Anything else is a startup error.                                                                                                                                                      |
+| `MCP_HTTP_HOST`  | `127.0.0.1` | Interface to bind. A non-loopback address requires `MCP_HTTP_TOKEN`.                                                                                                                                      |
+| `MCP_HTTP_PORT`  | `8701`      |                                                                                                                                                                                                           |
+| `MCP_HTTP_TOKEN` | (none)      | At least 32 characters. When set, every `/mcp` request must send `Authorization: Bearer <token>`. Without it the server binds loopback only and rejects requests whose `Host` header is not loopback (DNS-rebinding guard). |
+
+The endpoint is `POST /mcp`. It is stateless: a fresh server per request, JSON responses, no sessions, so `GET` and `DELETE` return 405. `GET /healthz` returns `{"ok":true}` without auth, for uptime checks. The token owner (`GET /user`) is still resolved once at startup, not per request.
+
+```bash
+claude mcp add --transport http gitlab http://127.0.0.1:8701/mcp --header "Authorization: Bearer <token>"
+```
+
 ## Develop
 
 ```bash
@@ -73,7 +95,7 @@ npm test             # vitest, mocked-fetch unit tests for all write tools
 
 **Node-version gotcha:** if your shell defaults to Node < 18, `npx vitest` will crash with `crypto.getRandomValues is not a function`. Either switch via nvm (`nvm use 20`) or invoke vitest directly: `node ./node_modules/vitest/vitest.mjs run`.
 
-The server speaks MCP over stdio — it has no HTTP listener and produces no stdout output until a client connects.
+In the default stdio mode the server produces no stdout output until a client connects. For HTTP, see [HTTP mode](#http-mode).
 
 ## Tools (v0.7)
 

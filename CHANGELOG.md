@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## Unreleased
 
 ### Added
+- Optional Streamable HTTP transport: `MCP_TRANSPORT=http` serves stateless MCP on `POST /mcp` (default `127.0.0.1:8701`), with bearer-token auth via `MCP_HTTP_TOKEN` and a `GET /healthz` probe. stdio stays the default. See README → HTTP mode.
 - `get_attachment`: reads images and files uploaded into issues, MRs, and comments (`/uploads/<secret>/<file>` links). Images come back as MCP image blocks, text inline (truncated at `max_bytes`), PDFs as an embedded resource, and other binaries as metadata only. Requires GitLab 17.4+.
 - `get_issue` / `get_merge_request` descriptions now point the model at `get_attachment` for `/uploads/` links.
 
